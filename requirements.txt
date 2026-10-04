@@ -1,0 +1,12 @@
+pandas
+scikit-learn
+numpy
+fastapi
+uvicorn
+python-multipart
+evidently
+pytest
+httpx
+mlflow
+ipykernel 
+jupyter

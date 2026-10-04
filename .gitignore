@@ -1,0 +1,10 @@
+.venv/
+venv/
+mlruns/
+mlflow.db
+data/
+__pycache__/
+.pytest_cache/
+.env
+*.pkl
+.DS_Store
