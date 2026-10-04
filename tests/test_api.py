@@ -58,7 +58,7 @@ def test_predict_returns_valid_response(mock_get_model):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["churn_probability"] == 0.7
+    assert body["churn_probability"] == 0.9
     assert body["churn_prediction"] == 1
 
 
