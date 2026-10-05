@@ -86,3 +86,20 @@ jobs:
         run: |
           az acr login --name $ACR_NAME
           docker push $IMAGE:${{ github.sha }}
+
+      # Point the running Container App at the image we just pushed. Azure starts
+      # a new revision with it and moves traffic across once it is healthy. To
+      # roll back, run this same command with an earlier commit hash.
+      - name: Deploy the new image to Azure Container Apps
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          az extension add --name containerapp --upgrade --yes
+          az containerapp update --name churn-api --resource-group churn-rg --image $IMAGE:${{ github.sha }}
+
+      # Run the same smoke test against the live public address.
+      - name: Smoke test the live deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          FQDN=$(az containerapp show --name churn-api --resource-group churn-rg --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Live at https://$FQDN" >> $GITHUB_STEP_SUMMARY
+          python3 scripts/smoke_test.py https://$FQDN
