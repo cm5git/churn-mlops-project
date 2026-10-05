@@ -34,3 +34,29 @@ jobs:
       # 4. Run the tests. If any test fails, this step fails and so does the build.
       - name: Run tests
         run: pytest tests/ -v
+
+  docker:
+    # Only build the image once the tests have passed.
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Follow the Dockerfile and build the image on GitHub's machine.
+      - name: Build the image
+        run: docker build -t churn-api:ci .
+
+      # Start a container from the image, exactly as it would run anywhere else.
+      - name: Start a container
+        run: docker run -d --name churn-api -p 8000:8000 churn-api:ci
+
+      # Call the running container: health check, predictions, bad input.
+      - name: Smoke test the running container
+        run: python3 scripts/smoke_test.py http://localhost:8000
+
+      # If anything above failed, show what the container itself reported.
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs churn-api
