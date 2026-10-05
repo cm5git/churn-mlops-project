@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+venv
+mlruns
+mlflow.db
+data
+notebooks
+tests
+__pycache__
+*.pyc
+.pytest_cache
+.DS_Store
+.env
+requirements-dev.txt

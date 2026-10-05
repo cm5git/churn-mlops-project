@@ -22,13 +22,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: pip   # reuse downloaded packages between runs
+          cache: pip
+          cache-dependency-path: requirements*.txt   # re-install when either file changes
 
-      # 3. Install the project's dependencies
+      # 3. Install the project's dependencies (serving + test tools)
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       # 4. Run the tests. If any test fails, this step fails and so does the build.
       - name: Run tests
