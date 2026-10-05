@@ -40,13 +40,24 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
 
+    # id-token: write lets this job ask GitHub for a short-lived identity token,
+    # which is what Azure checks when we log in without a password.
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      ACR_NAME: churnmlops15253
+      IMAGE: churnmlops15253.azurecr.io/churn-api
+
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      # Follow the Dockerfile and build the image on GitHub's machine.
+      # Build once. The image is tagged with the exact commit, so we always know
+      # what is deployed, and the same image that is tested is the one we ship.
       - name: Build the image
-        run: docker build -t churn-api:ci .
+        run: docker build -t churn-api:ci -t $IMAGE:${{ github.sha }} .
 
       # Start a container from the image, exactly as it would run anywhere else.
       - name: Start a container
@@ -60,3 +71,18 @@ jobs:
       - name: Show container logs on failure
         if: failure()
         run: docker logs churn-api
+
+      # From here on, only for pushes to main. Pull requests never touch Azure.
+      - name: Log in to Azure (no password, OIDC)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push the tested image to Azure Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          az acr login --name $ACR_NAME
+          docker push $IMAGE:${{ github.sha }}
