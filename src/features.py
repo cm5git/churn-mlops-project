@@ -7,15 +7,26 @@ fitted once in training and saved as a single artifact, so serving just
 calls it on raw data. There is no second, hand-written copy of the
 preprocessing to drift out of sync.
 
+Two classifiers can sit at the end of the pipeline, sharing identical
+preprocessing so that they are compared fairly:
+
+    champion   - logistic regression (simple, interpretable)
+    challenger - gradient boosting (more flexible, can capture interactions)
+
 The pipeline uses only built-in scikit-learn components (no custom
 functions), so the saved artifact can be loaded anywhere scikit-learn is
 installed, without needing this project's code on the import path.
 """
 
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CHAMPION = "champion"
+CHALLENGER = "challenger"
+MODEL_NAMES = (CHAMPION, CHALLENGER)
 
 NUMERIC_FEATURES = ["tenure", "MonthlyCharges"]
 PASSTHROUGH_FEATURES = ["SeniorCitizen"]  # already 0/1, used as-is
@@ -40,9 +51,9 @@ FEATURE_COLUMNS = (NUMERIC_FEATURES + PASSTHROUGH_FEATURES
                    + YES_NO_FEATURES + OTHER_CATEGORICAL_FEATURES)
 
 
-def build_pipeline(random_state: int = 42, max_iter: int = 1000) -> Pipeline:
-    """Build the full, unfitted pipeline: encode and scale -> classify."""
-    preprocessor = ColumnTransformer(
+def build_preprocessor() -> ColumnTransformer:
+    """Encoding and scaling, identical for every model."""
+    return ColumnTransformer(
         transformers=[
             # Scaler statistics come from whatever data fit() sees. Fitting the
             # pipeline on the training set only means no test-set leakage.
@@ -72,9 +83,30 @@ def build_pipeline(random_state: int = 42, max_iter: int = 1000) -> Pipeline:
         remainder="drop",  # ignore any other columns (e.g. customerID)
     )
 
+
+def build_classifier(model_name: str, random_state: int = 42):
+    """The final step of the pipeline. Both use class_weight="balanced" so the
+    comparison is fair: each is told that missing a churner costs more."""
+    if model_name == CHAMPION:
+        return LogisticRegression(
+            class_weight="balanced", random_state=random_state, max_iter=1000
+        )
+    if model_name == CHALLENGER:
+        # Deliberately modest settings (shallow trees, a small learning rate,
+        # regularisation) because the dataset is small and boosting overfits easily.
+        return HistGradientBoostingClassifier(
+            class_weight="balanced", learning_rate=0.05, max_iter=150,
+            max_leaf_nodes=15, min_samples_leaf=40, l2_regularization=1.0,
+            random_state=random_state,
+        )
+    raise ValueError(
+        f"Unknown model '{model_name}'. Choose one of: {', '.join(MODEL_NAMES)}"
+    )
+
+
+def build_pipeline(model_name: str = CHAMPION, random_state: int = 42) -> Pipeline:
+    """Build the full, unfitted pipeline: encode and scale -> classify."""
     return Pipeline(steps=[
-        ("preprocess", preprocessor),
-        ("model", LogisticRegression(
-            class_weight="balanced", random_state=random_state, max_iter=max_iter
-        )),
+        ("preprocess", build_preprocessor()),
+        ("model", build_classifier(model_name, random_state)),
     ])
