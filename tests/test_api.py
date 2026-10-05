@@ -9,11 +9,20 @@ test_features.py.
 
 from unittest.mock import MagicMock, patch
 
+import joblib
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sklearn.linear_model import LogisticRegression
 
+import app as app_module
 from app import app
+from src.features import build_pipeline
+from tests.test_features import make_training_data
+
+# "No internet service" is expected to be treated as "No" (an unknown category),
+# so scikit-learn's warning about it is expected in these tests.
+pytestmark = pytest.mark.filterwarnings("ignore:Found unknown categories")
 
 client = TestClient(app)
 
@@ -114,6 +123,7 @@ def test_predict_rejects_wrong_type():
     response = client.post("/predict", json=bad_customer)
     assert response.status_code == 422
 
+
 # ---------- Allowed-value validation ----------
 
 @pytest.mark.parametrize("field, bad_value", [
@@ -153,3 +163,65 @@ def test_predict_accepts_every_allowed_value(mock_get_model, field, value):
     response = client.post("/predict", json={**VALID_CUSTOMER, field: value})
 
     assert response.status_code == 200
+
+
+# ---------- Model loading ----------
+
+def test_load_model_reads_the_file_named_by_model_path(tmp_path, monkeypatch):
+    model_file = tmp_path / "tiny.joblib"
+    joblib.dump(LogisticRegression().fit([[0], [1]], [0, 1]), model_file)
+    monkeypatch.setenv("MODEL_PATH", str(model_file))
+
+    model = app_module.load_model()
+
+    assert model.predict_proba([[1]])[0][1] > 0.5
+
+
+def test_load_model_gives_a_helpful_error_when_file_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "missing.joblib"))
+
+    with pytest.raises(FileNotFoundError, match="src.train"):
+        app_module.load_model()
+
+
+def test_get_model_loads_once_and_reuses_the_cached_copy(monkeypatch):
+    monkeypatch.setattr(app_module, "_model", None)  # start with an empty cache
+
+    with patch("app.load_model", return_value="fake-model") as mock_load:
+        first = app_module.get_model()
+        second = app_module.get_model()
+
+    assert first == second == "fake-model"
+    mock_load.assert_called_once()
+
+
+# ---------- Integration: real API + real fitted pipeline, no mocks ----------
+
+@pytest.fixture
+def real_pipeline():
+    X, y = make_training_data()
+    return build_pipeline().fit(X, y)
+
+
+@patch("app.get_model")
+def test_api_works_end_to_end_with_a_real_pipeline(mock_get_model, real_pipeline):
+    mock_get_model.return_value = real_pipeline
+
+    response = client.post("/predict", json=VALID_CUSTOMER)
+
+    assert response.status_code == 200
+    assert 0 <= response.json()["churn_probability"] <= 1
+
+
+@patch("app.get_model")
+def test_api_prediction_responds_to_categorical_fields(mock_get_model, real_pipeline):
+    """
+    End-to-end version of the original serving bug: changing ONLY the contract
+    must change the prediction. When categoricals were silently zeroed, it didn't.
+    """
+    mock_get_model.return_value = real_pipeline
+
+    month_to_month = client.post("/predict", json={**VALID_CUSTOMER, "Contract": "Month-to-month"})
+    two_year = client.post("/predict", json={**VALID_CUSTOMER, "Contract": "Two year"})
+
+    assert month_to_month.json()["churn_probability"] != two_year.json()["churn_probability"]

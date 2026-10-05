@@ -1,28 +1,31 @@
 """
 FastAPI service for serving churn predictions.
 
-The model artifact is a complete scikit-learn Pipeline (encoding, scaling
-and classifier), so this file does no preprocessing of its own: it hands the
-raw customer fields straight to the pipeline.
+The model is a complete scikit-learn Pipeline (encoding, scaling and
+classifier) saved as one file, so this file does no preprocessing of its own:
+it hands the raw customer fields straight to the pipeline. Serving needs only
+scikit-learn, not MLflow.
 """
 
+import os
 import warnings
-from typing import Literal  
-import mlflow
-import mlflow.sklearn
+from pathlib import Path
+from typing import Literal
+
+import joblib
 import pandas as pd
 from fastapi import FastAPI
-from mlflow.tracking import MlflowClient
-from pydantic import BaseModel,Field
+from pydantic import BaseModel, Field
 
 # The yes/no columns rely on "unknown category -> all zeros" to treat
 # "No internet service" as "No" (see src/features.py), so scikit-learn's
 # "unknown categories" warning is expected and would only add log noise.
 warnings.filterwarnings("ignore", message="Found unknown categories", category=UserWarning)
 
-# Set the tracking location explicitly in code, so the app doesn't depend on a
-# hidden environment variable (a Docker container or CI runner wouldn't inherit it).
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+# Where the trained pipeline lives. src/train.py writes it here. Set the
+# MODEL_PATH environment variable to load it from somewhere else (for example
+# a mounted volume or a downloaded registry artifact).
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "model" / "model.joblib"
 
 app = FastAPI(title="Churn Prediction API")
 
@@ -31,18 +34,18 @@ app = FastAPI(title="Churn Prediction API")
 _model = None
 
 
-def load_latest_model():
-    """Load the pipeline from the most recent MLflow run."""
-    client = MlflowClient()
-    experiment = client.get_experiment_by_name("Default")
-    runs = client.search_runs(
-        experiment_ids=[experiment.experiment_id],
-        order_by=["start_time DESC"],
-        max_results=1,
-    )
-    run_id = runs[0].info.run_id
-    model = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
-    print(f"Loaded model from run {run_id}")
+def load_model():
+    """
+    Load the saved pipeline from disk. Only load files you created yourself:
+    joblib files are pickles, and unpickling untrusted data can run code.
+    """
+    path = Path(os.environ.get("MODEL_PATH", DEFAULT_MODEL_PATH))
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No trained model at {path}. Run `python3 -m src.train` to create it."
+        )
+    model = joblib.load(path)
+    print(f"Loaded model from {path}")
     return model
 
 
@@ -54,7 +57,7 @@ def get_model():
     """
     global _model
     if _model is None:
-        _model = load_latest_model()
+        _model = load_model()
     return _model
 
 
@@ -90,7 +93,8 @@ class CustomerData(BaseModel):
         "Credit card (automatic)",
     ]
     MonthlyCharges: float = Field(ge=0)
-    
+
+
 @app.get("/")
 def root():
     return {"message": "Churn Prediction API is running"}

@@ -13,6 +13,7 @@ MLflow as a single artifact. Run from the project root:
 import warnings
 from pathlib import Path
 
+import joblib
 import mlflow
 import mlflow.sklearn
 import pandas as pd
@@ -26,6 +27,10 @@ from src.features import FEATURE_COLUMNS, build_pipeline
 # "No internet service" as "No" (see src/features.py), so scikit-learn's
 # "unknown categories" warning is expected here.
 warnings.filterwarnings("ignore", message="Found unknown categories", category=UserWarning)
+
+
+# The API loads the pipeline from this file (see app.py).
+MODEL_PATH = Path(__file__).resolve().parent.parent / "model" / "model.joblib"
 
 
 def load_data(path: Path) -> pd.DataFrame:
@@ -85,6 +90,12 @@ def main():
         # One artifact: preprocessing + model together. No separate
         # scaler.pkl or feature_columns.pkl needed any more.
         mlflow.sklearn.log_model(pipeline, "model")
+
+        # Also save a plain copy for serving. The API loads this file, so the
+        # serving image needs scikit-learn but not MLflow.
+        MODEL_PATH.parent.mkdir(exist_ok=True)
+        joblib.dump(pipeline, MODEL_PATH)
+        print("Model saved to", MODEL_PATH)
 
         print("MLflow run logged:", mlflow.active_run().info.run_id)
 
